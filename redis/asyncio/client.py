@@ -652,8 +652,8 @@ class PubSub:
     will be returned and it's safe to start listening again.
     """
 
-    PUBLISH_MESSAGE_TYPES = ("message", "pmessage")
-    UNSUBSCRIBE_MESSAGE_TYPES = ("unsubscribe", "punsubscribe")
+    PUBLISH_MESSAGE_TYPES = ("message", "pmessage", "smessage")
+    UNSUBSCRIBE_MESSAGE_TYPES = ("unsubscribe", "punsubscribe", "sunsubscribe")
     HEALTH_CHECK_MESSAGE = "redis-py-health-check"
 
     def __init__(
@@ -686,6 +686,8 @@ class PubSub:
         self.pending_unsubscribe_channels = set()
         self.patterns = {}
         self.pending_unsubscribe_patterns = set()
+        self.sharded_channels = {}
+        self.pending_unsubscribe_sharded_channels = set()
         self._lock = asyncio.Lock()
 
     async def __aenter__(self):
@@ -709,6 +711,8 @@ class PubSub:
             self.pending_unsubscribe_channels = set()
             self.patterns = {}
             self.pending_unsubscribe_patterns = set()
+            self.sharded_channels = {}
+            self.pending_unsubscribe_sharded_channels = set()
 
     def close(self) -> Awaitable[NoReturn]:
         # In case a connection property does not yet exist
@@ -725,6 +729,7 @@ class PubSub:
         # before passing them to [p]subscribe.
         self.pending_unsubscribe_channels.clear()
         self.pending_unsubscribe_patterns.clear()
+        self.pending_unsubscribe_sharded_channels.clear()
         if self.channels:
             channels = {}
             for k, v in self.channels.items():
@@ -735,6 +740,11 @@ class PubSub:
             for k, v in self.patterns.items():
                 patterns[self.encoder.decode(k, force=True)] = v
             await self.psubscribe(**patterns)
+        if self.sharded_channels:
+            sharded_channels = {}
+            for k, v in self.sharded_channels.items():
+                sharded_channels[self.encoder.decode(k, force=True)] = v
+            await self.ssubscribe(**patterns)
 
     @property
     def subscribed(self):
@@ -807,7 +817,7 @@ class PubSub:
         if conn is None:
             raise RuntimeError(
                 "pubsub connection not set: "
-                "did you forget to call subscribe() or psubscribe()?"
+                "did you forget to call subscribe() or psubscribe() or ssubscribe()?"
             )
 
         await self.check_health()
@@ -920,6 +930,41 @@ class PubSub:
         self.pending_unsubscribe_channels.update(channels)
         return self.execute_command("UNSUBSCRIBE", *parsed_args)
 
+    async def ssubscribe(self, *args: ChannelT, **kwargs: Callable):
+        """
+        Subscribe to channels. Channels supplied as keyword arguments expect
+        a channel name as the key and a callable as the value. A channel's
+        callable will be invoked automatically when a message is received on
+        that channel rather than producing a message via ``listen()`` or
+        ``get_message()``.
+        """
+        parsed_args = list_or_args((args[0],), args[1:]) if args else ()
+        new_channels = dict.fromkeys(parsed_args)
+        # Mypy bug: https://github.com/python/mypy/issues/10970
+        new_channels.update(kwargs)  # type: ignore[arg-type]
+        ret_val = await self.execute_command("SSUBSCRIBE", *new_channels.keys())
+        # update the channels dict AFTER we send the command. we don't want to
+        # subscribe twice to these channels, once for the command and again
+        # for the reconnection.
+        new_channels = self._normalize_keys(new_channels)
+        self.sharded_channels.update(new_channels)
+        self.pending_unsubscribe_sharded_channels.difference_update(new_channels)
+        return ret_val
+
+    def sunsubscribe(self, *args) -> Awaitable:
+        """
+        Unsubscribe from the supplied channels. If empty, unsubscribe from
+        all channels
+        """
+        if args:
+            parsed_args = list_or_args(args[0], args[1:])
+            channels = self._normalize_keys(dict.fromkeys(parsed_args))
+        else:
+            parsed_args = []
+            channels = self.sharded_channels
+        self.pending_unsubscribe_sharded_channels.update(channels)
+        return self.execute_command("SUNSUBSCRIBE", *parsed_args)
+
     async def listen(self) -> AsyncIterator:
         """Listen for messages on channels this client has been subscribed to"""
         while self.subscribed:
@@ -985,6 +1030,11 @@ class PubSub:
                 if pattern in self.pending_unsubscribe_patterns:
                     self.pending_unsubscribe_patterns.remove(pattern)
                     self.patterns.pop(pattern, None)
+            elif message_type == "sunsubscribe":
+                sharded_channel = response[1]
+                if sharded_channel in self.pending_unsubscribe_sharded_channels:
+                    self.pending_unsubscribe_sharded_channels.remove(sharded_channel)
+                    self.sharded_channels.pop(sharded_channel, None)
             else:
                 channel = response[1]
                 if channel in self.pending_unsubscribe_channels:
@@ -1033,6 +1083,9 @@ class PubSub:
         for channel, handler in self.channels.items():
             if handler is None:
                 raise PubSubError(f"Channel: '{channel}' has no handler registered")
+        for sharded_channel, handler in self.sharded_channels.items():
+            if handler is None:
+                raise PubSubError(f"Sharded Channel: '{sharded_channel}' has no handler registered")
         for pattern, handler in self.patterns.items():
             if handler is None:
                 raise PubSubError(f"Pattern: '{pattern}' has no handler registered")
