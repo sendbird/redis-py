@@ -1365,8 +1365,8 @@ class PubSub:
     will be returned and it's safe to start listening again.
     """
 
-    PUBLISH_MESSAGE_TYPES = ("message", "pmessage")
-    UNSUBSCRIBE_MESSAGE_TYPES = ("unsubscribe", "punsubscribe")
+    PUBLISH_MESSAGE_TYPES = ("message", "pmessage", "smessage")
+    UNSUBSCRIBE_MESSAGE_TYPES = ("unsubscribe", "punsubscribe", "sunsubscribe")
     HEALTH_CHECK_MESSAGE = "redis-py-health-check"
 
     def __init__(
@@ -1415,10 +1415,12 @@ class PubSub:
             self.connection_pool.release(self.connection)
             self.connection = None
         self.channels = {}
+        self.sharded_channels = {}
         self.health_check_response_counter = 0
         self.pending_unsubscribe_channels = set()
         self.patterns = {}
         self.pending_unsubscribe_patterns = set()
+        self.pending_sunsubscribe_sharded_channels = set()
         self.subscribed_event.clear()
 
     def close(self):
@@ -1431,6 +1433,7 @@ class PubSub:
         # before passing them to [p]subscribe.
         self.pending_unsubscribe_channels.clear()
         self.pending_unsubscribe_patterns.clear()
+        self.pending_sunsubscribe_sharded_channels.clear()
         if self.channels:
             channels = {}
             for k, v in self.channels.items():
@@ -1647,6 +1650,45 @@ class PubSub:
         self.pending_unsubscribe_channels.update(channels)
         return self.execute_command("UNSUBSCRIBE", *args)
 
+    def ssubscribe(self, *args, **kwargs):
+        """
+        Subscribe to sharded channels. Sharded channels supplied as keyword
+        arguments expect a channel name as the key and a callable as the value.
+        A sharded channel's callable will be invoked automatically when a message
+        is received on that channel rather than producing a message via ``listen()``
+        or ``get_message()``.
+        """
+        if args:
+            args = list_or_args(args[0], args[1:])
+        new_sharded_channels = dict.fromkeys(args)
+        new_sharded_channels.update(kwargs)
+        ret_val = self.execute_command("SSUBSCRIBE", *new_sharded_channels.keys())
+        # update the channels dict AFTER we send the command. we don't want to
+        # subscribe twice to these channels, once for the command and again
+        # for the reconnection.
+        new_sharded_channels = self._normalize_keys(new_sharded_channels)
+        self.sharded_channels.update(new_sharded_channels)
+        if not self.subscribed:
+            # Set the subscribed_event flag to True
+            self.subscribed_event.set()
+            # Clear the health check counter
+            self.health_check_response_counter = 0
+        self.pending_sunsubscribe_sharded_channels.difference_update(new_sharded_channels)
+        return ret_val
+
+    def sunsubscribe(self, *args, **kwargs):
+        """
+        Unsubscribe from the supplied sharded channels. If empty, unsubscribe from
+        all sharded channels
+        """
+        if args:
+            args = list_or_args(args[0], args[1:])
+            sharded_channels = self._normalize_keys(dict.fromkeys(args))
+        else:
+            sharded_channels = self.sharded_channels
+        self.pending_sunsubscribe_sharded_channels.update(sharded_channels)
+        return self.execute_command("SUNSUBSCRIBE", *args)
+
     def listen(self):
         "Listen for messages on channels this client has been subscribed to"
         while self.subscribed:
@@ -1726,12 +1768,17 @@ class PubSub:
                 if pattern in self.pending_unsubscribe_patterns:
                     self.pending_unsubscribe_patterns.remove(pattern)
                     self.patterns.pop(pattern, None)
-            else:
+            elif message_type == "unsubscribe":
                 channel = response[1]
                 if channel in self.pending_unsubscribe_channels:
                     self.pending_unsubscribe_channels.remove(channel)
                     self.channels.pop(channel, None)
-            if not self.channels and not self.patterns:
+            elif message_type == "sunsubscribe":
+                sharded_channel = response[1]
+                if sharded_channel in self.pending_sunsubscribe_sharded_channels:
+                    self.pending_sunsubscribe_sharded_channels.remove(sharded_channel)
+                    self.sharded_channels.pop(sharded_channel, None)
+            if not self.channels and not self.patterns and not self.sharded_channels:
                 # There are no subscriptions anymore, set subscribed_event flag
                 # to false
                 self.subscribed_event.clear()
@@ -1740,6 +1787,8 @@ class PubSub:
             # if there's a message handler, invoke it
             if message_type == "pmessage":
                 handler = self.patterns.get(message["pattern"], None)
+            elif message_type == "smessage":
+                handler = self.sharded_channels.get(message["channel"], None)
             else:
                 handler = self.channels.get(message["channel"], None)
             if handler:
@@ -1757,6 +1806,9 @@ class PubSub:
         for channel, handler in self.channels.items():
             if handler is None:
                 raise PubSubError(f"Channel: '{channel}' has no handler registered")
+        for sharded_channel, handler in self.sharded_channels.items():
+            if handler is None:
+                raise PubSubError(f"Channel: '{sharded_channel}' has no handler registered")
         for pattern, handler in self.patterns.items():
             if handler is None:
                 raise PubSubError(f"Pattern: '{pattern}' has no handler registered")
