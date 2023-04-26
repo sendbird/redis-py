@@ -5128,6 +5128,15 @@ class PubSubCommands(CommandsProtocol):
         """
         return self.execute_command("PUBSUB NUMSUB", *args, **kwargs)
 
+    def spublish(self, shardchannel: ChannelT, message: EncodableT, **kwargs) -> ResponseT:
+        """
+        Publish ``message`` on ``shardchannel``.
+        Returns the number of subscribers the message was delivered to.
+
+        For more information see https://redis.io/commands/spublish
+        """
+        return self.execute_command("SPUBLISH", shardchannel, message, **kwargs)
+
 
 AsyncPubSubCommands = PubSubCommands
 
