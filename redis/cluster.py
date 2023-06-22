@@ -591,7 +591,8 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
             self.retry = retry
             kwargs.update({"retry": self.retry})
         else:
-            kwargs.update({"retry": Retry(default_backoff(), 0)})
+            self.retry = Retry(default_backoff(), 0)
+            kwargs["retry"] = self.retry
 
         self.encoder = Encoder(
             kwargs.get("encoding", "utf-8"),
@@ -775,6 +776,7 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
             read_from_replicas=self.read_from_replicas,
             reinitialize_steps=self.reinitialize_steps,
             lock=self._lock,
+            retry=self.retry,
         )
 
     def lock(
@@ -1796,6 +1798,7 @@ class ClusterPipeline(RedisCluster):
         cluster_error_retry_attempts: int = 3,
         reinitialize_steps: int = 5,
         lock=None,
+        retry: Optional["Retry"] = None,
         **kwargs,
     ):
         """ """
@@ -1821,6 +1824,7 @@ class ClusterPipeline(RedisCluster):
         if lock is None:
             lock = threading.Lock()
         self._lock = lock
+        self.retry = retry
 
     def __repr__(self):
         """ """
@@ -1953,8 +1957,9 @@ class ClusterPipeline(RedisCluster):
                     stack,
                     raise_on_error=raise_on_error,
                     allow_redirections=allow_redirections,
+                    attempts_count=self.cluster_error_retry_attempts - retry_attempts,
                 )
-            except (ClusterDownError, ConnectionError) as e:
+            except (ClusterDownError, ConnectionError, TimeoutError) as e:
                 if retry_attempts > 0:
                     # Try again with the new cluster setup. All other errors
                     # should be raised.
@@ -1964,7 +1969,7 @@ class ClusterPipeline(RedisCluster):
                     raise e
 
     def _send_cluster_commands(
-        self, stack, raise_on_error=True, allow_redirections=True
+        self, stack, raise_on_error=True, allow_redirections=True, attempts_count=0
     ):
         """
         Send a bunch of cluster commands to the redis cluster.
@@ -2019,9 +2024,11 @@ class ClusterPipeline(RedisCluster):
                     redis_node = self.get_redis_connection(node)
                     try:
                         connection = get_connection(redis_node, c.args)
-                    except ConnectionError:
-                        # Connection retries are being handled in the node's
-                        # Retry object. Reinitialize the node -> slot table.
+                    except (ConnectionError, TimeoutError) as e:
+                        if self.retry and isinstance(e, self.retry._supported_errors):
+                            backoff = self.retry._backoff.compute(attempts_count)
+                            if backoff > 0:
+                                time.sleep(backoff)
                         self.nodes_manager.initialize()
                         if is_default_node:
                             self.replace_default_node()
