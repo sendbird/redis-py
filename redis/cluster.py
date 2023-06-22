@@ -1084,6 +1084,12 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
                     # The nodes and slots cache were reinitialized.
                     # Try again with the new cluster setup.
                     retry_attempts -= 1
+                    if self.retry and isinstance(e, self.retry._supported_errors):
+                        backoff = self.retry._backoff.compute(
+                            self.cluster_error_retry_attempts - retry_attempts
+                        )
+                        if backoff > 0:
+                            time.sleep(backoff)
                     continue
                 else:
                     # raise the exception

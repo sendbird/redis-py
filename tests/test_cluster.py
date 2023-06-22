@@ -12,7 +12,12 @@ from unittest.mock import DEFAULT, Mock, call, patch
 import pytest
 
 from redis import Redis
-from redis.backoff import ExponentialBackoff, NoBackoff, default_backoff
+from redis.backoff import (
+    ConstantBackoff,
+    ExponentialBackoff,
+    NoBackoff,
+    default_backoff,
+)
 from redis.cluster import (
     PRIMARY,
     REDIS_CLUSTER_HASH_SLOTS,
@@ -899,6 +904,32 @@ class TestRedisClusterObj:
         # verify that the proxies were indeed used
         n_used = sum((1 if p.n_connections else 0) for p in proxies)
         assert n_used > 1
+
+    @pytest.mark.parametrize("error", [ConnectionError, TimeoutError])
+    def test_additional_backoff_redis_cluster(self, error):
+        with patch.object(ConstantBackoff, "compute") as compute:
+
+            def _compute(target_node, *args, **kwargs):
+                return 1
+
+            compute.side_effect = _compute
+            with patch.object(RedisCluster, "_execute_command") as execute_command:
+
+                def raise_error(target_node, *args, **kwargs):
+                    execute_command.failed_calls += 1
+                    raise error("mocked error")
+
+                execute_command.side_effect = raise_error
+
+                rc = get_mocked_redis_client(
+                    host=default_host,
+                    port=default_port,
+                    retry=Retry(ConstantBackoff(1), 3),
+                )
+
+                with pytest.raises(error):
+                    rc.get("bar")
+                assert compute.call_count == rc.cluster_error_retry_attempts
 
 
 @pytest.mark.onlycluster
