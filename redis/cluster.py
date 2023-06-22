@@ -1143,8 +1143,6 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
                 # Remove the failed node from the startup nodes before we try
                 # to reinitialize the cluster
                 self.nodes_manager.startup_nodes.pop(target_node.name, None)
-                # Reset the cluster node's connection
-                target_node.redis_connection = None
                 self.nodes_manager.initialize()
                 raise e
             except MovedError as e:
