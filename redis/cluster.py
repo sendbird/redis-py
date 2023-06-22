@@ -858,41 +858,49 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
     def _determine_nodes(self, *args, **kwargs) -> List["ClusterNode"]:
         # Determine which nodes should be executed the command on.
         # Returns a list of target nodes.
-        command = args[0].upper()
-        if len(args) >= 2 and f"{args[0]} {args[1]}".upper() in self.command_flags:
-            command = f"{args[0]} {args[1]}".upper()
+        try:
+            command = args[0].upper()
+            if len(args) >= 2 and f"{args[0]} {args[1]}".upper() in self.command_flags:
+                command = f"{args[0]} {args[1]}".upper()
 
-        nodes_flag = kwargs.pop("nodes_flag", None)
-        if nodes_flag is not None:
-            # nodes flag passed by the user
-            command_flag = nodes_flag
-        else:
-            # get the nodes group for this command if it was predefined
-            command_flag = self.command_flags.get(command)
-        if command_flag == self.__class__.RANDOM:
-            # return a random node
-            return [self.get_random_node()]
-        elif command_flag == self.__class__.PRIMARIES:
-            # return all primaries
-            return self.get_primaries()
-        elif command_flag == self.__class__.REPLICAS:
-            # return all replicas
-            return self.get_replicas()
-        elif command_flag == self.__class__.ALL_NODES:
-            # return all nodes
-            return self.get_nodes()
-        elif command_flag == self.__class__.DEFAULT_NODE:
-            # return the cluster's default node
-            return [self.nodes_manager.default_node]
-        elif command in self.__class__.SEARCH_COMMANDS[0]:
-            return [self.nodes_manager.default_node]
-        else:
-            # get the node that holds the key's slot
-            slot = self.determine_slot(*args)
-            node = self.nodes_manager.get_node_from_slot(
-                slot, self.read_from_replicas and command in READ_COMMANDS
-            )
-            return [node]
+            nodes_flag = kwargs.pop("nodes_flag", None)
+            if nodes_flag is not None:
+                # nodes flag passed by the user
+                command_flag = nodes_flag
+            else:
+                # get the nodes group for this command if it was predefined
+                command_flag = self.command_flags.get(command)
+            if command_flag == self.__class__.RANDOM:
+                # return a random node
+                return [self.get_random_node()]
+            elif command_flag == self.__class__.PRIMARIES:
+                # return all primaries
+                return self.get_primaries()
+            elif command_flag == self.__class__.REPLICAS:
+                # return all replicas
+                return self.get_replicas()
+            elif command_flag == self.__class__.ALL_NODES:
+                # return all nodes
+                return self.get_nodes()
+            elif command_flag == self.__class__.DEFAULT_NODE:
+                # return the cluster's default node
+                return [self.nodes_manager.default_node]
+            elif command in self.__class__.SEARCH_COMMANDS[0]:
+                return [self.nodes_manager.default_node]
+            else:
+                # get the node that holds the key's slot
+                slot = self.determine_slot(*args)
+                node = self.nodes_manager.get_node_from_slot(
+                    slot, self.read_from_replicas and command in READ_COMMANDS
+                )
+                return [node]
+        except SlotNotCoveredError as e:
+            self.reinitialize_counter += 1
+            if self._should_reinitialized():
+                self.nodes_manager.initialize()
+                # Reset the counter
+                self.reinitialize_counter = 0
+            raise e
 
     def _should_reinitialized(self):
         # To reinitialize the cluster on every MOVED error,
@@ -1168,6 +1176,13 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
                 else:
                     self.nodes_manager.update_moved_exception(e)
                 moved = True
+            except SlotNotCoveredError as e:
+                self.reinitialize_counter += 1
+                if self._should_reinitialized():
+                    self.nodes_manager.initialize()
+                    # Reset the counter
+                    self.reinitialize_counter = 0
+                raise e
             except TryAgainError:
                 if ttl < self.RedisClusterRequestTTL / 2:
                     time.sleep(0.05)

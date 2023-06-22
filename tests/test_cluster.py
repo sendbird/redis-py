@@ -4,6 +4,7 @@ import select
 import socket
 import socketserver
 import threading
+import uuid
 import warnings
 from queue import LifoQueue, Queue
 from time import sleep
@@ -40,6 +41,7 @@ from redis.exceptions import (
     RedisClusterException,
     RedisError,
     ResponseError,
+    SlotNotCoveredError,
     TimeoutError,
 )
 from redis.retry import Retry
@@ -930,6 +932,19 @@ class TestRedisClusterObj:
                 with pytest.raises(error):
                     rc.get("bar")
                 assert compute.call_count == rc.cluster_error_retry_attempts
+
+    @pytest.mark.parametrize("reinitialize_steps", [2, 10, 99])
+    def test_recover_slot_not_covered_error(self, request, reinitialize_steps):
+        rc = _get_client(RedisCluster, request, reinitialize_steps=reinitialize_steps)
+        key = uuid.uuid4().hex
+
+        rc.nodes_manager.slots_cache[rc.keyslot(key)] = []
+
+        for _ in range(0, reinitialize_steps):
+            with pytest.raises(SlotNotCoveredError):
+                rc.get(key)
+
+        rc.get(key)
 
 
 @pytest.mark.onlycluster
