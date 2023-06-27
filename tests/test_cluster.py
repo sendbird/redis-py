@@ -1,5 +1,6 @@
 import binascii
 import datetime
+import random
 import select
 import socket
 import socketserver
@@ -8,6 +9,7 @@ import uuid
 import warnings
 from queue import LifoQueue, Queue
 from time import sleep
+from unittest import mock
 from unittest.mock import DEFAULT, Mock, call, patch
 
 import pytest
@@ -24,6 +26,7 @@ from redis.cluster import (
     REDIS_CLUSTER_HASH_SLOTS,
     REPLICA,
     ClusterNode,
+    LoadBalancer,
     NodesManager,
     RedisCluster,
     get_node_name,
@@ -2653,6 +2656,37 @@ class TestNodesManager:
 
         for node in rc.nodes_manager.nodes_cache.values():
             assert node.redis_connection.connection_pool.queue_class == queue_class
+
+    @pytest.mark.parametrize("invalid_index", [-10, 10])
+    def test_return_primary_if_invalid_node_index_is_returned(self, invalid_index):
+        rc = get_mocked_redis_client(
+            url="redis://my@DNS.com:7000",
+            cluster_slots=default_cluster_slots,
+        )
+        random_slot = random.randint(
+            default_cluster_slots[0][0], default_cluster_slots[0][1]
+        )
+
+        ports = set()
+        for _ in range(0, 10):
+            ports.add(
+                rc.nodes_manager.get_node_from_slot(
+                    random_slot, read_from_replicas=True
+                ).port
+            )
+        assert ports == {default_port, 7003}
+
+        ports = set()
+        with mock.patch.object(
+            LoadBalancer, "get_server_index", return_value=invalid_index
+        ):
+            for _ in range(0, 10):
+                ports.add(
+                    rc.nodes_manager.get_node_from_slot(
+                        random_slot, read_from_replicas=True
+                    ).port
+                )
+        assert ports == {default_port}
 
 
 @pytest.mark.onlycluster
