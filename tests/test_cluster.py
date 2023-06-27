@@ -929,7 +929,7 @@ class TestRedisClusterObj:
                 rc = get_mocked_redis_client(
                     host=default_host,
                     port=default_port,
-                    retry=Retry(ConstantBackoff(1), 3),
+                    retry=Retry(ConstantBackoff(1), 10),
                 )
 
                 with pytest.raises(error):
@@ -3090,6 +3090,33 @@ class TestClusterPipeline:
         p = r.pipeline()
         result = p.execute()
         assert result == []
+
+    @pytest.mark.parametrize("error", [ConnectionError, TimeoutError])
+    def test_additional_backoff_cluster_pipeline(self, r, error):
+        with patch.object(ConstantBackoff, "compute") as compute:
+
+            def _compute(target_node, *args, **kwargs):
+                return 1
+
+            compute.side_effect = _compute
+            with patch("redis.cluster.get_connection") as get_connection:
+
+                def raise_error(target_node, *args, **kwargs):
+                    get_connection.failed_calls += 1
+                    raise error("mocked error")
+
+                get_connection.side_effect = raise_error
+
+                r.set_retry(Retry(ConstantBackoff(1), 10))
+                pipeline = r.pipeline()
+
+                with pytest.raises(error):
+                    pipeline.get("bar")
+                    pipeline.get("bar")
+                    pipeline.execute()
+                # cluster pipeline does one more back off than a single Redis command
+                #   this is not required, but it's just how it's implemented as of now
+                assert compute.call_count == r.cluster_error_retry_attempts + 1
 
 
 @pytest.mark.onlycluster
