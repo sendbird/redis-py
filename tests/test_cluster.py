@@ -3053,10 +3053,11 @@ class TestClusterPipeline:
     def test_return_previous_acquired_connections(self, r, error):
         # in order to ensure that a pipeline will make use of connections
         #   from different nodes
-        assert r.keyslot('a') != r.keyslot('b')
+        assert r.keyslot("a") != r.keyslot("b")
 
         orig_func = redis.cluster.get_connection
         with patch("redis.cluster.get_connection") as get_connection:
+
             def raise_error(target_node, *args, **kwargs):
                 if get_connection.call_count == 2:
                     raise error("mocked error")
@@ -3065,7 +3066,7 @@ class TestClusterPipeline:
 
             get_connection.side_effect = raise_error
 
-            r.pipeline().get('a').get('b').execute()
+            r.pipeline().get("a").get("b").execute()
 
         # there should have been two get_connections per execution and
         #   two executions due to exception raised in the first execution
