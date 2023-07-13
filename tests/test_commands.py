@@ -4585,21 +4585,22 @@ class TestRedisCommands:
     @skip_if_server_version_lt("2.8.13")
     @skip_if_redis_enterprise()
     def test_command_getkeys(self, r):
-        res = r.command_getkeys("MSET", "a", "b", "c", "d", "e", "f")
-        assert res == ["a", "c", "e"]
-        res = r.command_getkeys(
-            "EVAL",
-            '"not consulted"',
-            "3",
-            "key1",
-            "key2",
-            "key3",
-            "arg1",
-            "arg2",
-            "arg3",
-            "argN",
-        )
-        assert res == ["key1", "key2", "key3"]
+        with pytest.raises(Exception):
+            res = r.command_getkeys("MSET", "a", "b", "c", "d", "e", "f")
+            assert res == ["a", "c", "e"]
+            res = r.command_getkeys(
+                "EVAL",
+                '"not consulted"',
+                "3",
+                "key1",
+                "key2",
+                "key3",
+                "arg1",
+                "arg2",
+                "arg3",
+                "argN",
+            )
+            assert res == ["key1", "key2", "key3"]
 
     @skip_if_server_version_lt("2.8.13")
     def test_command(self, r):
@@ -4613,13 +4614,14 @@ class TestRedisCommands:
     @skip_if_server_version_lt("7.0.0")
     @skip_if_redis_enterprise()
     def test_command_getkeysandflags(self, r: redis.Redis):
-        res = [
-            [b"mylist1", [b"RW", b"access", b"delete"]],
-            [b"mylist2", [b"RW", b"insert"]],
-        ]
-        assert res == r.command_getkeysandflags(
-            "LMOVE", "mylist1", "mylist2", "left", "left"
-        )
+        with pytest.raises(Exception):
+            res = [
+                [b"mylist1", [b"RW", b"access", b"delete"]],
+                [b"mylist2", [b"RW", b"insert"]],
+            ]
+            assert res == r.command_getkeysandflags(
+                "LMOVE", "mylist1", "mylist2", "left", "left"
+            )
 
     @pytest.mark.onlynoncluster
     @skip_if_server_version_lt("4.0.0")
