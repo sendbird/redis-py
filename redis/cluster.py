@@ -2037,6 +2037,7 @@ class ClusterPipeline(RedisCluster):
                         except (ConnectionError, TimeoutError) as e:
                             for n in nodes.values():
                                 n.connection_pool.release(n.connection)
+                                n.connection = None
                             nodes = {}
                             if self.retry and isinstance(
                                 e, self.retry._supported_errors
@@ -2091,6 +2092,7 @@ class ClusterPipeline(RedisCluster):
             # a mismatched result.
             for n in nodes.values():
                 n.connection_pool.release(n.connection)
+                n.connection = None
             nodes = {}
 
             # if the response isn't an exception it is a
@@ -2158,8 +2160,9 @@ class ClusterPipeline(RedisCluster):
             # since we cant guarantee the state of the connections,
             #   disconnect before returning it to the connection pool
             for n in nodes.values():
-                n.connection.disconnect()
-                n.connection_pool.release(n.connection)
+                if n.connection:
+                    n.connection.disconnect()
+                    n.connection_pool.release(n.connection)
             raise
 
     def _fail_on_redirect(self, allow_redirections):
