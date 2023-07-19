@@ -2792,9 +2792,11 @@ class TestClusterPipeline:
     """
 
     @pytest.mark.parametrize("function", ["write", "read"])
-    def test_connection_release_with_unexpected_error_in_node_commands(self, r, function):
+    def test_connection_release_with_unexpected_error_in_node_commands(
+        self, r, function
+    ):
         """
-        Test that connection is released to the pool, even with unexpected error in NodeCommands' functions
+        Test that connection is released to the pool, even with an unexpected error
         """
         with patch.object(NodeCommands, function) as m:
 

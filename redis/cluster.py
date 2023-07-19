@@ -2038,7 +2038,9 @@ class ClusterPipeline(RedisCluster):
                             for n in nodes.values():
                                 n.connection_pool.release(n.connection)
                             nodes = {}
-                            if self.retry and isinstance(e, self.retry._supported_errors):
+                            if self.retry and isinstance(
+                                e, self.retry._supported_errors
+                            ):
                                 backoff = self.retry._backoff.compute(attempts_count)
                                 if backoff > 0:
                                     time.sleep(backoff)
