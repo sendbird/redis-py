@@ -2034,7 +2034,7 @@ class ClusterPipeline(RedisCluster):
                         redis_node = self.get_redis_connection(node)
                         try:
                             connection = get_connection(redis_node, c.args)
-                        except (ConnectionError, TimeoutError) as e:
+                        except BaseException as e:
                             for n in nodes.values():
                                 n.connection_pool.release(n.connection)
                                 n.connection = None
@@ -2043,9 +2043,10 @@ class ClusterPipeline(RedisCluster):
                                 backoff = self.retry._backoff.compute(attempts_count)
                                 if backoff > 0:
                                     time.sleep(backoff)
-                            self.nodes_manager.initialize()
-                            if is_default_node:
-                                self.replace_default_node()
+                            if isinstance(e, (ConnectionError, TimeoutError)):
+                                self.nodes_manager.initialize()
+                                if is_default_node:
+                                    self.replace_default_node()
                             raise
                         nodes[node_name] = NodeCommands(
                             redis_node.parse_response,
