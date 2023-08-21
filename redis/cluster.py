@@ -1103,7 +1103,7 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
                     # The nodes and slots cache were reinitialized.
                     # Try again with the new cluster setup.
                     retry_attempts -= 1
-                    if self.retry and isinstance(e, self.retry._supported_errors):
+                    if self.retry and self.retry.is_supported_error(e):
                         backoff = self.retry._backoff.compute(
                             self.cluster_error_retry_attempts - retry_attempts
                         )
@@ -2039,9 +2039,7 @@ class ClusterPipeline(RedisCluster):
                                 n.connection_pool.release(n.connection)
                                 n.connection = None
                             nodes = {}
-                            if self.retry and isinstance(
-                                e, self.retry._supported_errors
-                            ):
+                            if self.retry and self.retry.is_supported_error(e):
                                 backoff = self.retry._backoff.compute(attempts_count)
                                 if backoff > 0:
                                     time.sleep(backoff)
