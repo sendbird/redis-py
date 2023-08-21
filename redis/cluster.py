@@ -2162,6 +2162,8 @@ class ClusterPipeline(RedisCluster):
                 if n.connection:
                     n.connection.disconnect()
                     n.connection_pool.release(n.connection)
+            if len(nodes) > 0:
+                time.sleep(0.25)
             raise
 
     def _fail_on_redirect(self, allow_redirections):
