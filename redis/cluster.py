@@ -2614,6 +2614,16 @@ class PipelineCommand:
         self.asking = False
         self.command_policies: Optional[CommandPolicies] = None
 
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}<"
+            f"args={repr(self.args)},"
+            f"options={repr(self.options)},"
+            f"position={self.position},"
+            f"result={repr(self.result)}"
+            ">"
+        )
+
 
 class NodeCommands:
     """ """
@@ -2624,6 +2634,14 @@ class NodeCommands:
         self.connection_pool = connection_pool
         self.connection = connection
         self.commands = []
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}<"
+            f"connection={repr(self.connection)},"
+            f"commands={repr(self.commands)}"
+            ">"
+        )
 
     def append(self, c):
         """ """
