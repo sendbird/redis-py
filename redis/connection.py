@@ -25,6 +25,7 @@ from redis.exceptions import (
     DataError,
     ExecAbortError,
     InvalidResponse,
+    MaxConnectionsError,
     ModuleError,
     NoPermissionError,
     NoScriptError,
@@ -1491,7 +1492,7 @@ class ConnectionPool:
     def make_connection(self):
         "Create a new connection"
         if self._created_connections >= self.max_connections:
-            raise ConnectionError("Too many connections")
+            raise MaxConnectionsError("Too many connections")
         self._created_connections += 1
         return self.connection_class(**self.connection_kwargs)
 
@@ -1651,7 +1652,7 @@ class BlockingConnectionPool(ConnectionPool):
         except Empty:
             # Note that this is not caught by the redis client and will be
             # raised unless handled by application code. If you want never to
-            raise ConnectionError("No connection available.")
+            raise MaxConnectionsError("No connection available.")
 
         # If the ``connection`` is actually ``None`` then that's a cue to make
         # a new connection to add to the pool.
