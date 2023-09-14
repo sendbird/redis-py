@@ -2697,6 +2697,7 @@ class TestNodesManager:
             time_defaultdict = timeit.Timer(nm.initialize).timeit(number=1000)
             print(time_defaultdict)
             # original implementation: number=1000, 15.134753834019648
+            # new implementation: number=1000, 3.0220605000213254
 
     def test_init_slots_cache_cluster_mode_disabled(self):
         """
