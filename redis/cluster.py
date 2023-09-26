@@ -2293,7 +2293,6 @@ PIPELINE_BLOCKED_COMMANDS = (
     "MSETNX",
     "PFCOUNT",
     "PFMERGE",
-    "PING",
     "PUBLISH",
     "RANDOMKEY",
     "READONLY",
