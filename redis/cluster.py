@@ -157,6 +157,7 @@ REDIS_ALLOWED_KEYS = (
     "ssl_cert_reqs",
     "ssl_keyfile",
     "ssl_password",
+    "timeout",  # added timeout to support injecting BlockingConnectionPool timeout
     "unix_socket_path",
     "username",
 )
