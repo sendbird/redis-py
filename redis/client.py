@@ -840,6 +840,7 @@ class PubSub:
             self.health_check_response = [b"pong", self.health_check_response_b]
         if self.push_handler_func is None:
             _set_info_logger()
+        self._connection_lock = threading.Lock()
         self.reset()
 
     def __enter__(self) -> "PubSub":
@@ -916,17 +917,19 @@ class PubSub:
         # subscribed to one or more channels
 
         if self.connection is None:
-            self.connection = self.connection_pool.get_connection()
-            # register a callback that re-subscribes to any channels we
-            # were listening to when we were disconnected
-            self.connection.register_connect_callback(self.on_connect)
-            if self.push_handler_func is not None:
-                self.connection._parser.set_pubsub_push_handler(self.push_handler_func)
-            self._event_dispatcher.dispatch(
-                AfterPubSubConnectionInstantiationEvent(
-                    self.connection, self.connection_pool, ClientType.SYNC, self._lock
-                )
-            )
+            with self._connection_lock:
+                if self.connection is None:
+                    self.connection = self.connection_pool.get_connection()
+                    # register a callback that re-subscribes to any channels we
+                    # were listening to when we were disconnected
+                    self.connection.register_connect_callback(self.on_connect)
+                    if self.push_handler_func is not None:
+                        self.connection._parser.set_pubsub_push_handler(self.push_handler_func)
+                    self._event_dispatcher.dispatch(
+                        AfterPubSubConnectionInstantiationEvent(
+                            self.connection, self.connection_pool, ClientType.SYNC, self._lock
+                        )
+                    )
         connection = self.connection
         kwargs = {"check_health": not self.subscribed}
         if not self.subscribed:
