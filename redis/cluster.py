@@ -2051,6 +2051,7 @@ class ClusterPubSub(PubSub):
         node=None,
         host=None,
         port=None,
+        replica=False,
         push_handler_func=None,
         event_dispatcher: Optional["EventDispatcher"] = None,
         **kwargs,
@@ -2069,6 +2070,7 @@ class ClusterPubSub(PubSub):
         :type port: int
         """
         self.node = None
+        self.replica = replica
         self.set_pubsub_node(redis_cluster, node, host, port)
         connection_pool = (
             None
@@ -2218,7 +2220,7 @@ class ClusterPubSub(PubSub):
             if message["channel"] in self.pending_unsubscribe_shard_channels:
                 self.pending_unsubscribe_shard_channels.remove(message["channel"])
                 self.shard_channels.pop(message["channel"], None)
-                node = self.cluster.get_node_from_key(message["channel"])
+                node = self.cluster.get_node_from_key(message["channel"], self.replica)
                 if self.node_pubsub_mapping[node.name].subscribed is False:
                     self.node_pubsub_mapping.pop(node.name)
         if not self.channels and not self.patterns and not self.shard_channels:
@@ -2235,7 +2237,7 @@ class ClusterPubSub(PubSub):
         s_channels = dict.fromkeys(args)
         s_channels.update(kwargs)
         for s_channel, handler in s_channels.items():
-            node = self.cluster.get_node_from_key(s_channel)
+            node = self.cluster.get_node_from_key(s_channel, self.replica)
             pubsub = self._get_node_pubsub(node)
             if handler:
                 pubsub.ssubscribe(**{s_channel: handler})
@@ -2256,7 +2258,7 @@ class ClusterPubSub(PubSub):
             args = self.shard_channels
 
         for s_channel in args:
-            node = self.cluster.get_node_from_key(s_channel)
+            node = self.cluster.get_node_from_key(s_channel, self.replica)
             p = self._get_node_pubsub(node)
             p.sunsubscribe(s_channel)
             self.pending_unsubscribe_shard_channels.update(
