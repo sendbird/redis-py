@@ -1682,8 +1682,8 @@ class PubSub:
             channels_by_slot[slot].append(channel)
 
         slot_count = len(channels_by_slot)
-        min_interval_ms = 25
-        base_interval_ms = max(60_000 / slot_count, min_interval_ms)
+        min_interval_ms = 10
+        base_interval_ms = max(30_000 / slot_count, min_interval_ms)
 
         for slot, channels in channels_by_slot.items():
             self.execute_command("SSUBSCRIBE", *channels)
