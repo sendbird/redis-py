@@ -1682,7 +1682,7 @@ class PubSub:
             channels_by_slot[slot].append(channel)
 
         slot_count = len(channels_by_slot)
-        min_interval_ms = 100
+        min_interval_ms = 25
         base_interval_ms = max(60_000 / slot_count, min_interval_ms)
 
         for slot, channels in channels_by_slot.items():
