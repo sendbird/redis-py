@@ -3047,16 +3047,21 @@ class PipelineStrategy(AbstractStrategy):
                     redis_node = self._pipe.get_redis_connection(node)
                     try:
                         connection = get_connection(redis_node)
-                    except (ConnectionError, TimeoutError):
+                    except BaseException as e:
                         for n in nodes.values():
                             n.connection_pool.release(n.connection)
                             n.connection = None
                         nodes = {}
-                        # Connection retries are being handled in the node's
-                        # Retry object. Reinitialize the node -> slot table.
-                        self._nodes_manager.initialize()
-                        if is_default_node:
-                            self._pipe.replace_default_node()
+                        if self._pipe.retry and self._pipe.retry.is_supported_error(e):
+                            backoff = self._pipe.retry._backoff.compute(0)
+                            if backoff > 0:
+                                time.sleep(backoff)
+                        if isinstance(e, (ConnectionError, TimeoutError)):
+                            # Connection retries are being handled in the node's
+                            # Retry object. Reinitialize the node -> slot table.
+                            self._nodes_manager.initialize()
+                            if is_default_node:
+                                self._pipe.replace_default_node()
                         raise
                     nodes[node_name] = NodeCommands(
                         redis_node.parse_response,
