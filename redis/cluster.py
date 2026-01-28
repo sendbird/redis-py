@@ -3050,6 +3050,8 @@ class PipelineStrategy(AbstractStrategy):
                     except (ConnectionError, TimeoutError):
                         for n in nodes.values():
                             n.connection_pool.release(n.connection)
+                            n.connection = None
+                        nodes = {}
                         # Connection retries are being handled in the node's
                         # Retry object. Reinitialize the node -> slot table.
                         self._nodes_manager.initialize()
@@ -3079,6 +3081,18 @@ class PipelineStrategy(AbstractStrategy):
 
             for n in node_commands:
                 n.read()
+        except BaseException:
+            # if nodes is not empty, a problem must have occurred
+            # since we can't guarantee the state of the connections,
+            # disconnect before returning it to the connection pool
+            for n in nodes.values():
+                if n.connection:
+                    n.connection.disconnect()
+                    n.connection_pool.release(n.connection)
+            if len(nodes) > 0:
+                time.sleep(0.25)
+            nodes = {}  # Clear to prevent double-release in finally
+            raise
         finally:
             # release all of the redis connections we allocated earlier
             # back into the connection pool.
