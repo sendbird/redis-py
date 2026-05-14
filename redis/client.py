@@ -2,6 +2,7 @@ import copy
 import re
 import threading
 import time
+from collections import defaultdict
 from itertools import chain
 from typing import (
     TYPE_CHECKING,
@@ -39,6 +40,7 @@ from redis.connection import (
     SSLConnection,
     UnixDomainSocketConnection,
 )
+from redis.crc import key_slot
 from redis.credentials import CredentialProvider
 from redis.event import (
     AfterPooledConnectionsInstantiationEvent,
@@ -838,6 +840,7 @@ class PubSub:
             self.health_check_response = [b"pong", self.health_check_response_b]
         if self.push_handler_func is None:
             _set_info_logger()
+        self._connection_lock = threading.Lock()
         self.reset()
 
     def __enter__(self) -> "PubSub":
@@ -892,11 +895,14 @@ class PubSub:
             }
             self.psubscribe(**patterns)
         if self.shard_channels:
-            shard_channels = {
-                self.encoder.decode(k, force=True): v
-                for k, v in self.shard_channels.items()
-            }
-            self.ssubscribe(**shard_channels)
+            channels_by_slot = defaultdict(dict)
+            for k, v in self.shard_channels.items():
+                key = self.encoder.decode(k, force=True)
+                slot = key_slot(self.encoder.encode(key))
+                channels_by_slot[slot][key] = v
+
+            for slot, channels in channels_by_slot.items():
+                self.ssubscribe(**channels)
 
     @property
     def subscribed(self) -> bool:
@@ -911,17 +917,19 @@ class PubSub:
         # subscribed to one or more channels
 
         if self.connection is None:
-            self.connection = self.connection_pool.get_connection()
-            # register a callback that re-subscribes to any channels we
-            # were listening to when we were disconnected
-            self.connection.register_connect_callback(self.on_connect)
-            if self.push_handler_func is not None:
-                self.connection._parser.set_pubsub_push_handler(self.push_handler_func)
-            self._event_dispatcher.dispatch(
-                AfterPubSubConnectionInstantiationEvent(
-                    self.connection, self.connection_pool, ClientType.SYNC, self._lock
-                )
-            )
+            with self._connection_lock:
+                if self.connection is None:
+                    self.connection = self.connection_pool.get_connection()
+                    # register a callback that re-subscribes to any channels we
+                    # were listening to when we were disconnected
+                    self.connection.register_connect_callback(self.on_connect)
+                    if self.push_handler_func is not None:
+                        self.connection._parser.set_pubsub_push_handler(self.push_handler_func)
+                    self._event_dispatcher.dispatch(
+                        AfterPubSubConnectionInstantiationEvent(
+                            self.connection, self.connection_pool, ClientType.SYNC, self._lock
+                        )
+                    )
         connection = self.connection
         kwargs = {"check_health": not self.subscribed}
         if not self.subscribed:
@@ -1127,6 +1135,7 @@ class PubSub:
         new_s_channels = dict.fromkeys(args)
         new_s_channels.update(kwargs)
         ret_val = self.execute_command("SSUBSCRIBE", *new_s_channels.keys())
+
         # update the s_channels dict AFTER we send the command. we don't want to
         # subscribe twice to these channels, once for the command and again
         # for the reconnection.

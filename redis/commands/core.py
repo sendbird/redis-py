@@ -5949,9 +5949,7 @@ class Script:
         except NoScriptError:
             # Maybe the client is pointed to a different server than the client
             # that created this instance?
-            # Overwrite the sha just in case there was a discrepancy.
-            self.sha = client.script_load(self.script)
-            return client.evalsha(self.sha, len(keys), *args)
+            return client.eval(self.script, len(keys), *args)
 
     def get_encoder(self):
         """Get the encoder to encode string scripts into bytes."""
@@ -6020,9 +6018,7 @@ class AsyncScript:
         except NoScriptError:
             # Maybe the client is pointed to a different server than the client
             # that created this instance?
-            # Overwrite the sha just in case there was a discrepancy.
-            self.sha = await client.script_load(self.script)
-            return await client.evalsha(self.sha, len(keys), *args)
+            return await client.eval(self.script, len(keys), *args)
 
 
 class PubSubCommands(CommandsProtocol):

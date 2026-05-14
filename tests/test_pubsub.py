@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 import redis
+from redis._parsers.encoders import Encoder
 from redis.exceptions import ConnectionError
 
 from .conftest import (
@@ -40,6 +41,31 @@ def wait_for_message(
         time.sleep(0.01)
         now = time.monotonic()
     return None
+
+
+def test_on_connect_resubscribes_shard_channels_grouped_by_slot():
+    connection_pool = mock.Mock()
+    connection_pool.get_encoder.return_value = Encoder("utf-8", "strict", False)
+
+    pubsub = redis.client.PubSub(connection_pool)
+    handler_a = mock.Mock()
+    handler_b = mock.Mock()
+    handler_c = mock.Mock()
+    pubsub.shard_channels = {
+        b"{same-slot}:a": handler_a,
+        b"{same-slot}:b": handler_b,
+        b"{other-slot}:c": handler_c,
+    }
+    pubsub.ssubscribe = mock.Mock()
+
+    pubsub.on_connect(mock.Mock())
+
+    resubscribe_groups = [call.kwargs for call in pubsub.ssubscribe.call_args_list]
+    assert {
+        "{same-slot}:a": handler_a,
+        "{same-slot}:b": handler_b,
+    } in resubscribe_groups
+    assert {"{other-slot}:c": handler_c} in resubscribe_groups
 
 
 def make_message(type, channel, data, pattern=None):
@@ -1160,3 +1186,22 @@ class TestBaseException:
 
         # the timeout on the read should not cause disconnect
         assert is_connected()
+
+
+@pytest.mark.onlynoncluster
+class TestConnectionLeak:
+    def test_connection_leak(self, r: redis.Redis):
+        pubsub = r.pubsub()
+
+        def test():
+            tid = threading.get_ident()
+            pubsub.subscribe(f"foo{tid}")
+
+        threads = [threading.Thread(target=test) for _ in range(10)]
+        for thread in threads:
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+        assert r.connection_pool._created_connections == 2

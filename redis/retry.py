@@ -71,6 +71,10 @@ class AbstractRetry(Generic[E], abc.ABC):
         """
         self._retries = value
 
+    def is_supported_error(self, error: Exception) -> bool:
+        """Check if the error is one of the supported error types."""
+        return isinstance(error, self._supported_errors)
+
 
 class Retry(AbstractRetry[Exception]):
     __hash__ = AbstractRetry.__hash__

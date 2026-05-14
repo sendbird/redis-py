@@ -2051,6 +2051,7 @@ class ClusterPubSub(PubSub):
         node=None,
         host=None,
         port=None,
+        replica=False,
         push_handler_func=None,
         event_dispatcher: Optional["EventDispatcher"] = None,
         **kwargs,
@@ -2069,6 +2070,7 @@ class ClusterPubSub(PubSub):
         :type port: int
         """
         self.node = None
+        self.replica = replica
         self.set_pubsub_node(redis_cluster, node, host, port)
         connection_pool = (
             None
@@ -2218,7 +2220,7 @@ class ClusterPubSub(PubSub):
             if message["channel"] in self.pending_unsubscribe_shard_channels:
                 self.pending_unsubscribe_shard_channels.remove(message["channel"])
                 self.shard_channels.pop(message["channel"], None)
-                node = self.cluster.get_node_from_key(message["channel"])
+                node = self.cluster.get_node_from_key(message["channel"], self.replica)
                 if self.node_pubsub_mapping[node.name].subscribed is False:
                     self.node_pubsub_mapping.pop(node.name)
         if not self.channels and not self.patterns and not self.shard_channels:
@@ -2235,7 +2237,7 @@ class ClusterPubSub(PubSub):
         s_channels = dict.fromkeys(args)
         s_channels.update(kwargs)
         for s_channel, handler in s_channels.items():
-            node = self.cluster.get_node_from_key(s_channel)
+            node = self.cluster.get_node_from_key(s_channel, self.replica)
             pubsub = self._get_node_pubsub(node)
             if handler:
                 pubsub.ssubscribe(**{s_channel: handler})
@@ -2256,7 +2258,7 @@ class ClusterPubSub(PubSub):
             args = self.shard_channels
 
         for s_channel in args:
-            node = self.cluster.get_node_from_key(s_channel)
+            node = self.cluster.get_node_from_key(s_channel, self.replica)
             p = self._get_node_pubsub(node)
             p.sunsubscribe(s_channel)
             self.pending_unsubscribe_shard_channels.update(
@@ -2612,6 +2614,16 @@ class PipelineCommand:
         self.asking = False
         self.command_policies: Optional[CommandPolicies] = None
 
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}<"
+            f"args={repr(self.args)},"
+            f"options={repr(self.options)},"
+            f"position={self.position},"
+            f"result={repr(self.result)}"
+            ">"
+        )
+
 
 class NodeCommands:
     """ """
@@ -2622,6 +2634,14 @@ class NodeCommands:
         self.connection_pool = connection_pool
         self.connection = connection
         self.commands = []
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}<"
+            f"connection={repr(self.connection)},"
+            f"commands={repr(self.commands)}"
+            ">"
+        )
 
     def append(self, c):
         """ """
@@ -3045,14 +3065,21 @@ class PipelineStrategy(AbstractStrategy):
                     redis_node = self._pipe.get_redis_connection(node)
                     try:
                         connection = get_connection(redis_node)
-                    except (ConnectionError, TimeoutError):
+                    except BaseException as e:
                         for n in nodes.values():
                             n.connection_pool.release(n.connection)
-                        # Connection retries are being handled in the node's
-                        # Retry object. Reinitialize the node -> slot table.
-                        self._nodes_manager.initialize()
-                        if is_default_node:
-                            self._pipe.replace_default_node()
+                            n.connection = None
+                        nodes = {}
+                        if self._pipe.retry and self._pipe.retry.is_supported_error(e):
+                            backoff = self._pipe.retry._backoff.compute(0)
+                            if backoff > 0:
+                                time.sleep(backoff)
+                        if isinstance(e, (ConnectionError, TimeoutError)):
+                            # Connection retries are being handled in the node's
+                            # Retry object. Reinitialize the node -> slot table.
+                            self._nodes_manager.initialize()
+                            if is_default_node:
+                                self._pipe.replace_default_node()
                         raise
                     nodes[node_name] = NodeCommands(
                         redis_node.parse_response,
@@ -3077,6 +3104,18 @@ class PipelineStrategy(AbstractStrategy):
 
             for n in node_commands:
                 n.read()
+        except BaseException:
+            # if nodes is not empty, a problem must have occurred
+            # since we can't guarantee the state of the connections,
+            # disconnect before returning it to the connection pool
+            for n in nodes.values():
+                if n.connection:
+                    n.connection.disconnect()
+                    n.connection_pool.release(n.connection)
+            if len(nodes) > 0:
+                time.sleep(0.25)
+            nodes = {}  # Clear to prevent double-release in finally
+            raise
         finally:
             # release all of the redis connections we allocated earlier
             # back into the connection pool.
