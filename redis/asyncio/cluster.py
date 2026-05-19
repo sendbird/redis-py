@@ -670,14 +670,25 @@ class RedisCluster(AbstractRedis, AbstractRedisCluster, AsyncRedisClusterCommand
         """
         Returns a list of nodes that hold the specified keys' slots.
         """
-        # get the node that holds the key's slot
-        return [
-            self.nodes_manager.get_node_from_slot(
-                await self._determine_slot(command, *args),
-                self.read_from_replicas and command in READ_COMMANDS,
-                self.load_balancing_strategy if command in READ_COMMANDS else None,
-            )
-        ]
+        try:
+            # get the node that holds the key's slot
+            slot = await self._determine_slot(command, *args)
+            return [
+                self.nodes_manager.get_node_from_slot(
+                    slot,
+                    self.read_from_replicas and command in READ_COMMANDS,
+                    self.load_balancing_strategy if command in READ_COMMANDS else None,
+                )
+            ]
+        except SlotNotCoveredError:
+            self.reinitialize_counter += 1
+            if (
+                self.reinitialize_steps
+                and self.reinitialize_counter % self.reinitialize_steps == 0
+            ):
+                await self.nodes_manager.initialize()
+                self.reinitialize_counter = 0
+            raise
 
     def get_special_nodes(self) -> Optional[list["ClusterNode"]]:
         """
@@ -756,7 +767,7 @@ class RedisCluster(AbstractRedis, AbstractRedisCluster, AsyncRedisClusterCommand
         # EVAL/EVALSHA.
         # - issue: https://github.com/redis/redis/issues/9493
         # - fix: https://github.com/redis/redis/pull/9733
-        if command.upper() in ("EVAL", "EVALSHA"):
+        if command.upper() in ("EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO"):
             # command syntax: EVAL "script body" num_keys ...
             if len(args) < 2:
                 raise RedisClusterException(
@@ -980,18 +991,25 @@ class RedisCluster(AbstractRedis, AbstractRedisCluster, AsyncRedisClusterCommand
                 # and try again with the new setup
                 await self.aclose()
                 raise
-            except (ClusterDownError, SlotNotCoveredError):
+            except ClusterDownError:
                 # ClusterDownError can occur during a failover and to get
                 # self-healed, we will try to reinitialize the cluster layout
                 # and retry executing the command
 
-                # SlotNotCoveredError can occur when the cluster is not fully
-                # initialized or can be temporary issue.
-                # We will try to reinitialize the cluster topology
-                # and retry executing the command
-
                 await self.aclose()
                 await asyncio.sleep(0.25)
+                raise
+            except SlotNotCoveredError:
+                # SlotNotCoveredError can happen transiently while slots are
+                # moving. Honor reinitialize_steps so clients do not stampede
+                # CLUSTER SLOTS refreshes on every temporary slot miss.
+                self.reinitialize_counter += 1
+                if (
+                    self.reinitialize_steps
+                    and self.reinitialize_counter % self.reinitialize_steps == 0
+                ):
+                    await self.aclose()
+                    self.reinitialize_counter = 0
                 raise
             except MovedError as e:
                 # First, we will try to patch the slots/nodes cache with the

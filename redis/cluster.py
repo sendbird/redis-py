@@ -855,13 +855,20 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
         """
         Returns a list of nodes that hold the specified keys' slots.
         """
-        # get the node that holds the key's slot
-        slot = self.determine_slot(*args)
-        node = self.nodes_manager.get_node_from_slot(
-            slot,
-            self.read_from_replicas and command in READ_COMMANDS,
-            self.load_balancing_strategy if command in READ_COMMANDS else None,
-        )
+        try:
+            # get the node that holds the key's slot
+            slot = self.determine_slot(*args)
+            node = self.nodes_manager.get_node_from_slot(
+                slot,
+                self.read_from_replicas and command in READ_COMMANDS,
+                self.load_balancing_strategy if command in READ_COMMANDS else None,
+            )
+        except SlotNotCoveredError:
+            self.reinitialize_counter += 1
+            if self._should_reinitialized():
+                self.nodes_manager.initialize()
+                self.reinitialize_counter = 0
+            raise
         return [node]
 
     def _split_multi_shard_command(self, *args, **kwargs) -> list[dict]:
@@ -1160,7 +1167,7 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
         # redis server to parse the keys. Besides, there is a bug in redis<7.0
         # where `self._get_command_keys()` fails anyway. So, we special case
         # EVAL/EVALSHA.
-        if command.upper() in ("EVAL", "EVALSHA"):
+        if command.upper() in ("EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO"):
             # command syntax: EVAL "script body" num_keys ...
             if len(args) <= 2:
                 raise RedisClusterException(f"Invalid args in command: {args}")
@@ -1441,18 +1448,21 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
             except AskError as e:
                 redirect_addr = get_node_name(host=e.host, port=e.port)
                 asking = True
-            except (ClusterDownError, SlotNotCoveredError):
+            except ClusterDownError:
                 # ClusterDownError can occur during a failover and to get
                 # self-healed, we will try to reinitialize the cluster layout
                 # and retry executing the command
-
-                # SlotNotCoveredError can occur when the cluster is not fully
-                # initialized or can be temporary issue.
-                # We will try to reinitialize the cluster topology
-                # and retry executing the command
-
                 time.sleep(0.25)
                 self.nodes_manager.initialize()
+                raise
+            except SlotNotCoveredError:
+                # SlotNotCoveredError can happen transiently while slots are
+                # moving. Honor reinitialize_steps so clients do not stampede
+                # CLUSTER SLOTS refreshes on every temporary slot miss.
+                self.reinitialize_counter += 1
+                if self._should_reinitialized():
+                    self.nodes_manager.initialize()
+                    self.reinitialize_counter = 0
                 raise
             except ResponseError:
                 raise
