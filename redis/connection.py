@@ -92,6 +92,28 @@ else:
     DefaultParser = _RESP2Parser
 
 
+def _normalized_command_token(value):
+    if isinstance(value, bytes):
+        return value.lower()
+    if isinstance(value, str):
+        return value.encode().lower()
+    return str(value).encode().lower()
+
+
+def _raise_if_command_getkeys(args):
+    # COMMAND GETKEYS can crash Redis server entirely under certain conditions.
+    # Keep Sendbird clients from sending it directly or through command parsing.
+    if (
+        len(args) > 1
+        and _normalized_command_token(args[0]) == b"command"
+        and _normalized_command_token(args[1]).startswith(b"getkeys")
+    ):
+        raise RedisError(
+            f'Redis command "{ensure_string(args[0])} {ensure_string(args[1])}" '
+            "is not supported"
+        )
+
+
 class HiredisRespSerializer:
     def pack(self, *args: List):
         """Pack a series of arguments into the Redis protocol"""
@@ -101,6 +123,7 @@ class HiredisRespSerializer:
             args = tuple(args[0].encode().split()) + args[1:]
         elif b" " in args[0]:
             args = tuple(args[0].split()) + args[1:]
+        _raise_if_command_getkeys(args)
         try:
             output.append(hiredis.pack_command(args))
         except TypeError:
@@ -127,6 +150,7 @@ class PythonRespSerializer:
             args = tuple(args[0].encode().split()) + args[1:]
         elif b" " in args[0]:
             args = tuple(args[0].split()) + args[1:]
+        _raise_if_command_getkeys(args)
 
         buff = SYM_EMPTY.join((SYM_STAR, str(len(args)).encode(), SYM_CRLF))
 
@@ -2886,7 +2910,7 @@ class BlockingConnectionPool(ConnectionPool):
             except Empty:
                 # Note that this is not caught by the redis client and will be
                 # raised unless handled by application code. If you want never to
-                raise ConnectionError("No connection available.")
+                raise MaxConnectionsError("No connection available.")
 
             # If the ``connection`` is actually ``None`` then that's a cue to make
             # a new connection to add to the pool.

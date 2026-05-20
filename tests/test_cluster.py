@@ -13,7 +13,7 @@ from unittest.mock import DEFAULT, Mock, call, patch
 import pytest
 import redis
 from redis import Redis
-from redis._parsers import CommandsParser
+from redis._parsers import CommandsParser, Encoder
 from redis.backoff import (
     ExponentialBackoff,
     ExponentialWithJitterBackoff,
@@ -63,6 +63,39 @@ default_cluster_slots = [
     [0, 8191, ["127.0.0.1", 7000, "node_0"], ["127.0.0.1", 7003, "node_3"]],
     [8192, 16383, ["127.0.0.1", 7001, "node_1"], ["127.0.0.1", 7002, "node_2"]],
 ]
+
+
+def test_determine_slot_zunionstore_uses_local_key_parsing():
+    rc = RedisCluster.__new__(RedisCluster)
+    rc.command_flags = {}
+    rc.encoder = Encoder("utf-8", "strict", False)
+
+    with patch.object(rc, "_get_command_keys") as get_keys:
+        slot = rc.determine_slot(
+            "ZUNIONSTORE",
+            "{foo}out",
+            2,
+            "{foo}a",
+            "{foo}b",
+            "WEIGHTS",
+            2,
+            3,
+        )
+
+    get_keys.assert_not_called()
+    assert slot == key_slot(b"{foo}out")
+
+
+def test_determine_slot_zunionstore_validates_cross_slot_keys():
+    rc = RedisCluster.__new__(RedisCluster)
+    rc.command_flags = {}
+    rc.encoder = Encoder("utf-8", "strict", False)
+
+    with pytest.raises(
+        RedisClusterException,
+        match="ZUNIONSTORE - all keys must map to the same key slot",
+    ):
+        rc.determine_slot("ZUNIONSTORE", "{foo}out", 2, "{foo}a", "{bar}b")
 
 
 class ProxyRequestHandler(socketserver.BaseRequestHandler):

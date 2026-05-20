@@ -200,7 +200,7 @@ class TestBlockingConnectionPool:
         pool.get_connection()
 
         start = time.monotonic()
-        with pytest.raises(redis.ConnectionError):
+        with pytest.raises(redis.MaxConnectionsError):
             pool.get_connection()
         # we should have waited at least 0.1 seconds
         assert time.monotonic() - start >= 0.1

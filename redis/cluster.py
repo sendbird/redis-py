@@ -431,6 +431,7 @@ class AbstractRedisCluster:
     ERRORS_ALLOW_RETRY = (
         ConnectionError,
         TimeoutError,
+        MaxConnectionsError,
         ClusterDownError,
         SlotNotCoveredError,
     )
@@ -1178,6 +1179,13 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
             if len(eval_keys) == 0:
                 return random.randrange(0, REDIS_CLUSTER_HASH_SLOTS)
             keys = eval_keys
+        elif command.upper() == "ZUNIONSTORE":
+            # command syntax: ZUNIONSTORE destination numkeys key [key ...]
+            #   [WEIGHTS weight [weight ...]] [AGGREGATE <SUM | MIN | MAX>]
+            if len(args) <= 3:
+                raise RedisClusterException(f"Invalid args in ZUNIONSTORE: {args}")
+            num_actual_keys = int(args[2])
+            keys = (args[1],) + args[3 : 3 + num_actual_keys]
         else:
             keys = self._get_command_keys(*args)
             if keys is None or len(keys) == 0:
@@ -2301,6 +2309,7 @@ class ClusterPipeline(RedisCluster):
     ERRORS_ALLOW_RETRY = (
         ConnectionError,
         TimeoutError,
+        MaxConnectionsError,
         MovedError,
         AskError,
         TryAgainError,

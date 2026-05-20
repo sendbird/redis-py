@@ -225,6 +225,23 @@ def test_pack_command(Class):
 
 
 @pytest.mark.onlynoncluster
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        ("COMMAND GETKEYS", "MSET", "a", "b", "c", "d"),
+        ("COMMAND", "GETKEYS", "MSET", "a", "b", "c", "d"),
+        (b"COMMAND GETKEYSANDFLAGS", b"LMOVE", b"a", b"b", b"left", b"left"),
+    ],
+)
+def test_pack_command_rejects_command_getkeys(cmd):
+    with pytest.raises(
+        redis.RedisError,
+        match=r'Redis command "COMMAND GETKEYS.*" is not supported',
+    ):
+        Connection().pack_command(*cmd)
+
+
+@pytest.mark.onlynoncluster
 def test_create_single_connection_client_from_url():
     client = redis.Redis.from_url(
         "redis://localhost:6379/0?", single_connection_client=True
