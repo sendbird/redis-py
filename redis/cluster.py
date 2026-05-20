@@ -1149,6 +1149,20 @@ class RedisCluster(AbstractRedisCluster, RedisClusterCommands):
         redis_conn = self.get_default_node().redis_connection
         return self.commands_parser.get_keys(redis_conn, *args)
 
+    def _get_command_keys_for_policy(self, *args):
+        command = args[0].upper()
+        if command in ("EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO"):
+            if len(args) <= 2:
+                raise RedisClusterException(f"Invalid args in command: {args}")
+            num_actual_keys = int(args[2])
+            return args[3 : 3 + num_actual_keys]
+        elif command == "ZUNIONSTORE":
+            if len(args) <= 3:
+                raise RedisClusterException(f"Invalid args in ZUNIONSTORE: {args}")
+            num_actual_keys = int(args[2])
+            return (args[1],) + args[3 : 3 + num_actual_keys]
+        return self._get_command_keys(*args)
+
     def determine_slot(self, *args) -> int:
         """
         Figure out what slot to use based on args.
@@ -3039,7 +3053,9 @@ class PipelineStrategy(AbstractStrategy):
                             if not self._pipe.get_default_node():
                                 keys = None
                             else:
-                                keys = self._pipe._get_command_keys(*c.args)
+                                keys = self._pipe._get_command_keys_for_policy(
+                                    *c.args
+                                )
                             if not keys or len(keys) == 0:
                                 command_policies = CommandPolicies()
                             else:

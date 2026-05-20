@@ -98,6 +98,36 @@ def test_determine_slot_zunionstore_validates_cross_slot_keys():
         rc.determine_slot("ZUNIONSTORE", "{foo}out", 2, "{foo}a", "{bar}b")
 
 
+@pytest.mark.parametrize("command", ("EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO"))
+def test_get_command_keys_for_policy_eval_commands_use_local_key_parsing(command):
+    rc = RedisCluster.__new__(RedisCluster)
+
+    with patch.object(rc, "_get_command_keys") as get_keys:
+        keys = rc._get_command_keys_for_policy(command, "script-or-sha", 2, "a", "b")
+
+    get_keys.assert_not_called()
+    assert keys == ("a", "b")
+
+
+def test_get_command_keys_for_policy_zunionstore_uses_local_key_parsing():
+    rc = RedisCluster.__new__(RedisCluster)
+
+    with patch.object(rc, "_get_command_keys") as get_keys:
+        keys = rc._get_command_keys_for_policy(
+            "ZUNIONSTORE",
+            "{foo}out",
+            2,
+            "{foo}a",
+            "{foo}b",
+            "WEIGHTS",
+            2,
+            3,
+        )
+
+    get_keys.assert_not_called()
+    assert keys == ("{foo}out", "{foo}a", "{foo}b")
+
+
 class ProxyRequestHandler(socketserver.BaseRequestHandler):
     def recv(self, sock):
         """A recv with a timeout"""
