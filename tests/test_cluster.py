@@ -3461,14 +3461,50 @@ class TestClusterPipeline:
         r = get_mocked_redis_client(host=default_host, port=default_port)
         r.nodes_manager.initialize = Mock()
 
-        with patch(
+        with patch("redis.cluster.time.sleep") as sleep, patch(
             "redis.cluster.get_connection",
             side_effect=redis.MaxConnectionsError("No connection available."),
         ) as get_connection:
             with pytest.raises(redis.MaxConnectionsError):
                 r.pipeline().get("a").execute()
 
-        assert get_connection.call_count > 0
+        assert get_connection.call_count == 1
+        sleep.assert_not_called()
+        r.nodes_manager.initialize.assert_not_called()
+
+    def test_max_connections_error_does_not_retry_or_reinitialize_slots(self):
+        r = get_mocked_redis_client(host=default_host, port=default_port)
+        r.nodes_manager.initialize = Mock()
+
+        with patch.object(
+            r,
+            "get_redis_connection",
+            side_effect=redis.MaxConnectionsError("No connection available."),
+        ) as get_redis_connection:
+            with pytest.raises(redis.MaxConnectionsError):
+                r.get("a")
+
+        assert get_redis_connection.call_count == 1
+        r.nodes_manager.initialize.assert_not_called()
+
+    def test_transaction_max_connections_error_does_not_retry_or_reinitialize_slots(
+        self,
+    ):
+        r = get_mocked_redis_client(host=default_host, port=default_port)
+        r.nodes_manager.initialize = Mock()
+        pipe = r.pipeline(transaction=True)
+
+        with patch.object(pipe, "determine_slot", return_value=0), patch(
+            "redis.retry.sleep"
+        ) as sleep, patch(
+            "redis.cluster.get_connection",
+            side_effect=redis.MaxConnectionsError("No connection available."),
+        ) as get_connection:
+            with pytest.raises(redis.MaxConnectionsError):
+                pipe.watch("a")
+
+        assert get_connection.call_count == 1
+        sleep.assert_not_called()
         r.nodes_manager.initialize.assert_not_called()
 
     def test_empty_stack(self, r):

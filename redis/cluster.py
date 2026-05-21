@@ -431,7 +431,6 @@ class AbstractRedisCluster:
     ERRORS_ALLOW_RETRY = (
         ConnectionError,
         TimeoutError,
-        MaxConnectionsError,
         ClusterDownError,
         SlotNotCoveredError,
     )
@@ -2323,7 +2322,6 @@ class ClusterPipeline(RedisCluster):
     ERRORS_ALLOW_RETRY = (
         ConnectionError,
         TimeoutError,
-        MaxConnectionsError,
         MovedError,
         AskError,
         TryAgainError,
@@ -2990,6 +2988,8 @@ class PipelineStrategy(AbstractStrategy):
                     raise_on_error=raise_on_error,
                     allow_redirections=allow_redirections,
                 )
+            except MaxConnectionsError:
+                raise
             except RedisCluster.ERRORS_ALLOW_RETRY as e:
                 if retry_attempts > 0:
                     # Try again with the new cluster setup. All other errors
@@ -3105,11 +3105,13 @@ class PipelineStrategy(AbstractStrategy):
                             n.connection_pool.release(n.connection)
                             n.connection = None
                         nodes = {}
-                        if self._pipe.retry and self._pipe.retry.is_supported_error(e):
-                            backoff = self._pipe.retry._backoff.compute(0)
-                            if backoff > 0:
-                                time.sleep(backoff)
                         if type(e) in (ConnectionError, TimeoutError):
+                            if self._pipe.retry and self._pipe.retry.is_supported_error(
+                                e
+                            ):
+                                backoff = self._pipe.retry._backoff.compute(0)
+                                if backoff > 0:
+                                    time.sleep(backoff)
                             # Connection retries are being handled in the node's
                             # Retry object. Reinitialize the node -> slot table.
                             self._nodes_manager.initialize()
@@ -3437,7 +3439,12 @@ class TransactionStrategy(AbstractStrategy):
         return self._retry.call_with_retry(
             lambda: self._get_connection_and_send_command(*args, **options),
             self._reinitialize_on_error,
+            is_retryable=self._is_retryable_error,
         )
+
+    @staticmethod
+    def _is_retryable_error(error):
+        return not isinstance(error, MaxConnectionsError)
 
     def _get_connection_and_send_command(self, *args, **options):
         redis_node, connection = self._get_client_and_connection_for_transaction()
@@ -3503,6 +3510,7 @@ class TransactionStrategy(AbstractStrategy):
         return self._retry.call_with_retry(
             lambda: self._execute_transaction(stack, raise_on_error),
             self._reinitialize_on_error,
+            is_retryable=self._is_retryable_error,
         )
 
     def _execute_transaction(
