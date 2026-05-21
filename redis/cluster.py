@@ -3109,7 +3109,7 @@ class PipelineStrategy(AbstractStrategy):
                             backoff = self._pipe.retry._backoff.compute(0)
                             if backoff > 0:
                                 time.sleep(backoff)
-                        if isinstance(e, (ConnectionError, TimeoutError)):
+                        if type(e) in (ConnectionError, TimeoutError):
                             # Connection retries are being handled in the node's
                             # Retry object. Reinitialize the node -> slot table.
                             self._nodes_manager.initialize()

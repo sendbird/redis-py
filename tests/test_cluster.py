@@ -3457,6 +3457,20 @@ class TestClusterPipeline:
             num_of_conns = len(connection_pool._available_connections)
             assert num_of_conns == connection_pool._created_connections
 
+    def test_pipeline_max_connections_error_does_not_reinitialize_slots(self):
+        r = get_mocked_redis_client(host=default_host, port=default_port)
+        r.nodes_manager.initialize = Mock()
+
+        with patch(
+            "redis.cluster.get_connection",
+            side_effect=redis.MaxConnectionsError("No connection available."),
+        ) as get_connection:
+            with pytest.raises(redis.MaxConnectionsError):
+                r.pipeline().get("a").execute()
+
+        assert get_connection.call_count > 0
+        r.nodes_manager.initialize.assert_not_called()
+
     def test_empty_stack(self, r):
         """
         If pipeline is executed with no commands it should
